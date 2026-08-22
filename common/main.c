@@ -25,9 +25,12 @@ struct track_tag
 typedef struct
 {
 	TRACK* start;
-	uint16_t tick;
-	double cycle;
+	uint16_t tick; //ticks per note
+	double samples_per_tick;
+	double ticks_after_last_tempo_change;
 } SCORE;
+
+static double sample_at_last_tempo_change;
 
 int read_vl(TRACK* p_trk, uint32_t* value)
 {
@@ -139,7 +142,9 @@ int read_event(TRACK* p_trk, SCORE* score)
 						return -1;
 					}
 				}
-				score->cycle = SAMPLE_RATE * (double)tempo / (double)score->tick / 1000000.0;
+				sample_at_last_tempo_change += score->ticks_after_last_tempo_change * score->samples_per_tick;
+				score->ticks_after_last_tempo_change = 0;
+				score->samples_per_tick = SAMPLE_RATE * (double)tempo / (double)score->tick / 1000000.0;
 			}
 			while (event_len)
 			{
@@ -188,7 +193,6 @@ int read_event(TRACK* p_trk, SCORE* score)
 					uint8_t velocity = v1;
 					if ((p_trk->status & 0xf0) == 0x80 || velocity == 0)//note off
 					{
-						
 						if (N_off(note, velocity, channel))
 						{
 							return -1;
@@ -364,7 +368,8 @@ int main(int argc, char* argv[])
 		return -1;
 	}printf("%s opened\n", MY_FILENAME1);
 	double max = 0;
-	int sample = 0;
+	int samples = 0;
+	sample_at_last_tempo_change = 0;
 	initiate();
 
 	for(int i=1;i<argc;++i)
@@ -385,7 +390,8 @@ int main(int argc, char* argv[])
 			break;
 		}
 		fclose(fpm); printf("%s closed\n", filename_m);
-		score0.cycle = SAMPLE_RATE * 500000.0 / (double)score0.tick / 1000000.0;
+		score0.samples_per_tick = SAMPLE_RATE * 500000.0 / (double)score0.tick / 1000000.0;
+		score0.ticks_after_last_tempo_change = 0;
 		while (score0.start != NULL)//breaks if no track left
 		{
 			TRACK** p = &score0.start;
@@ -430,9 +436,9 @@ int main(int argc, char* argv[])
 				}
 			}
 			////PLAY////
-			static double cycle = 0;
-			cycle += score0.cycle;
-			while (--cycle > 0)
+			++score0.ticks_after_last_tempo_change;
+			double next_stop = sample_at_last_tempo_change + score0.samples_per_tick * score0.ticks_after_last_tempo_change;
+			while (next_stop > samples)
 			{
 				double tmp = S();
 				fwrite(&tmp, sizeof(double), 1, fp1);
@@ -444,9 +450,10 @@ int main(int argc, char* argv[])
 				{
 					max = -tmp;
 				}
-				++sample;
+				++samples;
 			}
 		}
+		sample_at_last_tempo_change += score0.ticks_after_last_tempo_change * score0.samples_per_tick;
 	}
 	terminate();
 	fclose(fp1); printf("%s closed\n", MY_FILENAME1);
@@ -475,7 +482,7 @@ int main(int argc, char* argv[])
 		return -1;
 	}printf("%s opened\n", filename_w);
 	int8_t riff_chunk_ID[4] = { 'R','I','F','F' };
-	int32_t riff_chunk_size = 36 + sample * BYTE_PER_SAMPLE;
+	int32_t riff_chunk_size = 36 + samples * BYTE_PER_SAMPLE;
 	int8_t riff_form_type[4] = { 'W','A','V','E' };
 	int8_t fmt_chunk_ID[4] = { 'f', 'm', 't', ' ' };
 	int32_t fmt_chunk_size = 16;
@@ -486,7 +493,7 @@ int main(int argc, char* argv[])
 	int16_t fmt_block_size = BYTE_PER_SAMPLE;
 	int16_t fmt_bits_per_sample = BYTE_PER_SAMPLE * 8;
 	int8_t data_chunk_ID[4] = { 'd','a','t','a' };
-	int32_t data_chunk_size = sample * BYTE_PER_SAMPLE;
+	int32_t data_chunk_size = samples * BYTE_PER_SAMPLE;
 
 	fwrite(riff_chunk_ID, 1, 4, fp);
 	fwrite(&riff_chunk_size, 4, 1, fp);
@@ -501,7 +508,7 @@ int main(int argc, char* argv[])
 	fwrite(&fmt_bits_per_sample, 2, 1, fp);
 	fwrite(data_chunk_ID, 1, 4, fp);
 	fwrite(&data_chunk_size, 4, 1, fp);
-	while (sample)
+	while (samples)
 	{
 		double buff0;
 		fread(&buff0, sizeof(double), 1, fp2);
@@ -514,7 +521,7 @@ int main(int argc, char* argv[])
 			buff >>= 8;
 		}
 		fwrite(buff1, 1, BYTE_PER_SAMPLE, fp);
-		--sample;
+		--samples;
 	}
 	fclose(fp); printf("%s closed\n", filename_w);
 	fclose(fp2); printf("%s closed\n", MY_FILENAME1);
